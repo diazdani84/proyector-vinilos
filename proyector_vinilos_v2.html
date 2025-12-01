@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ahora Suena</title>
+  <style>
+    :root{--bg:#0f0f10;--card:#0b0b0c;--muted:#9aa0a6;--accent:#ffffff}
+    html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial; background:var(--bg); color:var(--accent); transition: background 0.5s ease;}
+    .wrap{max-width:1100px;margin:28px auto;padding:18px}
+    header{display:flex;gap:12px;align-items:center}
+    h1{font-weight:600;margin:0;font-size:20px}
+    form{margin-top:18px;display:flex;gap:8px}
+    input[type=text]{flex:1;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--accent);font-size:16px}
+    button{padding:12px 16px;border-radius:8px;border:none;background:rgba(255,255,255,0.08);color:var(--accent);cursor:pointer}
+    main{display:flex;gap:24px;margin-top:22px}
+    .cover{width:46%;min-width:320px;display:flex;align-items:center;justify-content:center}
+    .cover img{max-width:100%;height:auto;border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,0.6)}
+    .info{flex:1;background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);padding:18px;border-radius:10px}
+    .meta{display:flex;justify-content:space-between;align-items:center}
+    .title{font-size:20px;margin:4px 0}
+    .artist{color:var(--muted);font-size:14px}
+    ol.tracks{padding-left:18px;margin-top:14px;color:var(--accent)}
+    .hint{color:var(--muted);margin-top:10px;font-size:13px}
+    .big{font-size:28px}
+    footer{margin-top:20px;color:var(--muted);font-size:13px}
+    @media(max-width:900px){main{flex-direction:column}.cover{width:100%}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 class="big">Ahora Suena</h1>
+    </header>
+
+    <form id="searchForm">
+      <input id="q" type="text" placeholder="Escribe artista y disco (ej: 'Jarabe de Palo La Flaca')" autocomplete="off" required />
+      <button type="submit">Buscar</button>
+    </form>
+
+    <main>
+      <div class="cover" id="coverArea">
+        <div class="hint">Portada aquí</div>
+      </div>
+      <div class="info" id="infoArea">
+        <div class="meta">
+          <div>
+            <div class="title" id="albumTitle">—</div>
+            <div class="artist" id="albumArtist">—</div>
+          </div>
+          <div id="year" class="artist">&nbsp;</div>
+        </div>
+
+        <ol class="tracks" id="tracklist"></ol>
+        <div class="hint">Fuente: MusicBrainz + Cover Art Archive</div>
+      </div>
+    </main>
+
+    <footer>
+      Guardar este archivo en un servidor local y abrir la URL desde el navegador del Fire Stick (ej.: http://192.168.1.5:8000/proyector_vinilos.html)
+    </footer>
+  </div>
+
+<script>
+async function searchRelease(query){
+  // Busca lanzamientos por artista y release (disco) para mayor precisión
+  const url = 'https://musicbrainz.org/ws/2/release/?query=' + encodeURIComponent(query) + '&fmt=json&limit=6';
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('Error buscando en MusicBrainz');
+  const data = await res.json();
+  return data.releases || [];
+}
+
+async function getReleaseDetails(mbid){
+  const url = 'https://musicbrainz.org/ws/2/release/' + mbid + '?inc=recordings+artists&fmt=json';
+  const res = await fetch(url);
+  if(!res.ok) throw new Error('Error cargando release');
+  return await res.json();
+}
+
+function coverArtUrlForRelease(mbid){
+  return 'https://coverartarchive.org/release/' + mbid + '/front-800';
+}
+
+function applyBackgroundFromCover(img) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let r=0,g=0,b=0,count=0;
+    for(let i=0;i<data.length;i+=4*10){r+=data[i];g+=data[i+1];b+=data[i+2];count++;}
+    r=Math.floor(r/count); g=Math.floor(g/count); b=Math.floor(b/count);
+    document.body.style.background = `linear-gradient(to bottom, rgb(${r},${g},${b}), #0f0f10)`;
+}
+
+function showCover(url){
+  const coverArea = document.getElementById('coverArea');
+  coverArea.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = 'Portada';
+  img.onload = () => applyBackgroundFromCover(img);
+  img.onerror = ()=>{
+    coverArea.innerHTML = '<div class="hint">No se encontró portada</div>';
+    document.body.style.background = '#0f0f10';
+  };
+  coverArea.appendChild(img);
+}
+
+function showInfo(details){
+  document.getElementById('albumTitle').textContent = details.title || '—';
+  const artist = (details['artist-credit'] && details['artist-credit'][0] && details['artist-credit'][0].name) || '';
+  document.getElementById('albumArtist').textContent = artist;
+  document.getElementById('year').textContent = (details.date ? details.date.split('-')[0] : '');
+
+  const tracklist = document.getElementById('tracklist');
+  tracklist.innerHTML = '';
+  if(details.media && details.media.length){
+    const tracks = details.media[0].tracks || [];
+    tracks.forEach(t=>{const li=document.createElement('li');const title=t.title||'—';const dur=t.length?' ('+msToTime(t.length)+')':'';li.textContent=title+dur;tracklist.appendChild(li);});
+  } else if(details['recordings']){
+    details['recordings'].forEach(r=>{const li=document.createElement('li');li.textContent=r.title;tracklist.appendChild(li);});
+  } else {tracklist.innerHTML = '<li>No hay listado de pistas disponible</li>'}
+}
+
+function msToTime(ms){
+  if(!ms) return '';
+  let s=Math.floor(ms/1000); const m=Math.floor(s/60); s=s%60; return m+':' + (s<10?'0'+s:s);
+}
+
+document.getElementById('searchForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const q=document.getElementById('q').value.trim();
+  if(!q) return;
+  document.getElementById('albumTitle').textContent='Cargando...';
+  document.getElementById('albumArtist').textContent='';
+  document.getElementById('tracklist').innerHTML='';
+  document.getElementById('coverArea').innerHTML='<div class="hint">Cargando portada…</div>';
+
+  try{
+    const results = await searchRelease(q);
+    if(!results.length){document.getElementById('albumTitle').textContent='No encontrado';document.getElementById('coverArea').innerHTML='<div class="hint">Sin resultados</div>';document.body.style.background='#0f0f10';return;}
+    let pick=results[0]; for(const r of results){if(r.date){pick=r;break;}}
+
+    const details = await getReleaseDetails(pick.id);
+    showInfo(details);
+
+    const coverUrl = coverArtUrlForRelease(pick.id);
+    try{
+      const cv = await fetch(coverUrl,{method:'HEAD'});
+      if(cv.ok) showCover(coverUrl);
+      else {
+        if(pick['release-group'] && pick['release-group'].id){
+          const rg=pick['release-group'].id;
+          const alt='https://coverartarchive.org/release-group/'+rg+'/front-800';
+          const altRes = await fetch(alt,{method:'HEAD'});
+          if(altRes.ok) showCover(alt);
+          else {document.getElementById('coverArea').innerHTML='<div class="hint">No hay portada</div>';document.body.style.background='#0f0f10';}
+        } else {document.getElementById('coverArea').innerHTML='<div class="hint">No hay portada</div>';document.body.style.background='#0f0f10';}
+      }
+    }catch(err){document.getElementById('coverArea').innerHTML='<div class="hint">Error cargando portada</div>';document.body.style.background='#0f0f10';}
+
+  }catch(err){
+    document.getElementById('albumTitle').textContent='Error';
+    document.getElementById('coverArea').innerHTML='<div class="hint">'+(err.message||'Falló la búsqueda')+'</div>';
+    document.body.style.background='#0f0f10';
+    console.error(err);
+  }
+});
+
+</script>
+</body>
+</html>
